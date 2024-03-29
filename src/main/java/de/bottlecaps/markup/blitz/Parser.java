@@ -59,6 +59,8 @@ public class Parser
   private final BitSet[] expectedTokens;
   private final boolean isVersionMismatch;
   private final boolean shortestMatch;
+  private final boolean skipUnmatchedWords;
+  private final boolean multipleMatches;
 
   private Writer err = new OutputStreamWriter(System.err, StandardCharsets.UTF_8);
 
@@ -73,7 +75,8 @@ public class Parser
       int[] forks,
       BitSet[] expectedTokens,
       boolean isVersionMismatch,
-      boolean shortestMatch) {
+      boolean shortestMatch,
+      boolean skipUnmatchedWords, boolean multipleMatches) {
 
     this.defaultOptions = defaultOptions;
     this.asciiMap = asciiMap;
@@ -90,6 +93,8 @@ public class Parser
     this.expectedTokens = expectedTokens;
     this.isVersionMismatch = isVersionMismatch;
     this.shortestMatch = shortestMatch;
+    this.skipUnmatchedWords = skipUnmatchedWords;
+    this.multipleMatches = multipleMatches;
   }
 
   /**
@@ -730,16 +735,25 @@ public class Parser
               if (trace)
                 writeTrace("<parse-start startPos=\""+start+"\"/>\n");
               thread = parseThread(start);
-              if (currentOptions.contains(Option.MULTIPLE_MATCHES))
+              if (multipleMatches)
                 start = thread.b1;
               else
                 start = size;
             }
             catch (ParseException pe) {
-              if (currentOptions.contains(Option.SKIP_UNMATCHED_WORDS)) {
+              if (skipUnmatchedWords) {
+      // TODO Make this skip a word, not one character.
                 if (start != pe.getEnd()-1)
                   throw new BlitzException("Wethern's Law in action: start="+start+" is not equal to end-1="+(pe.getEnd()-1));
-                new Terminal(input.charAt(start++)).send(serializer);
+                if (Character.isLetterOrDigit(input.charAt(start))) {
+                  // skip the rest of this word
+                  new Terminal(input.charAt(start++)).send(serializer);
+                  while (start < size && Character.isLetterOrDigit(input.charAt(start)))
+                    new Terminal(input.charAt(start++)).send(serializer);
+                }
+                else {
+                  new Terminal(input.charAt(start++)).send(serializer);
+                }
                 thread = null; // Prevent normal serialization.
               }
               else {

@@ -98,6 +98,9 @@ public class Generator {
     boolean partialMatch = shortestMatch || longestMatch;
     ci.new SymbolCodeAssigner(partialMatch).visit(g);
 
+    boolean skipUnmatchedWords = options.contains(Option.SKIP_UNMATCHED_WORDS);
+    boolean multipleMatches = options.contains(Option.MULTIPLE_MATCHES);
+
     if (options.contains(Option.VERBOSE)) {
       System.err.println();
       System.err.println("Number of charClasses: " + ci.terminalCode.size());
@@ -204,7 +207,8 @@ public class Generator {
         ci.forks,
         expectedTokens,
         ci.grammar.isMismatch(),
-        shortestMatch);
+        shortestMatch,
+        skipUnmatchedWords, multipleMatches);
   }
 
   private int[] asciiMap(CompressedMap bmpMap) {
