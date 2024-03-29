@@ -15,6 +15,16 @@ import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.Set;
+import java.util.Stack;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import org.greenmercury.smax.Balancing;
+import org.greenmercury.smax.SmaxDocument;
+import org.greenmercury.smax.SmaxElement;
+import org.greenmercury.smax.convert.DomElement;
+import org.greenmercury.smax.convert.XmlString;
+import org.w3c.dom.Element;
 
 import de.bottlecaps.markup.Blitz.Option;
 import de.bottlecaps.markup.BlitzException;
@@ -91,6 +101,19 @@ public class Parser
    */
   public String parse(String input, Option... options) {
     return new ParsingContext(input).parse(options);
+  }
+
+  /**
+   * Parse the given input using SMAX, for transparent invisible XML.
+   *
+   * @param input the input string
+   * @param options options for use at parsing time. If absent, any options passed at generation time will be in effect
+   * @return the resulting XML
+   */
+  public String parse(Element inputElement, Option... options) {
+    SmaxDocument inputSmax = DomElement.toSmax(inputElement);
+    String parseResult = new ParsingContext(inputSmax.getContent().toString()).parseTixml(inputSmax, options);
+    return parseResult;
   }
 
   public void setTraceWriter(Writer w) {
@@ -402,6 +425,72 @@ public class Parser
     }
   }
 
+
+  private static class SmaxSerializer extends XmlSerializer {
+    private SmaxDocument document;
+    private Stack<SmaxElement> newElements;
+    private int depth;
+    private int attributeLevel;
+    private String attributeName;
+    private StringBuilder content;
+    private int charPointer;
+
+    public SmaxSerializer(SmaxDocument document) {
+      super(null, false);
+      this.document = document;
+      newElements = new Stack<>();
+      depth = 0;
+      attributeLevel = 0;
+      attributeName = null;
+      content = new StringBuilder();
+      charPointer = 0;
+    }
+
+    @Override
+    public void startNonterminal(String name) {
+      if (attributeLevel == 0) {
+        SmaxElement newElement = new SmaxElement(name).setStartPos(charPointer);
+        newElements.push(newElement);
+        ++depth;
+      }
+    }
+
+    @Override
+    public void endNonterminal(String name) {
+      if (attributeLevel == 0) {
+        --depth;
+        SmaxElement newElement = newElements.pop().setEndPos(charPointer);
+        document.insertMarkup(newElement, Balancing.INNER);
+      }
+    }
+
+    @Override
+    public void startAttribute(String name) {
+      ++attributeLevel;
+      attributeName = name;
+      content.setLength(0);
+    }
+
+    @Override
+    public void endAttribute() {
+      newElements.peek().setAttribute(attributeName, content.toString());
+      content.setLength(0);
+      --attributeLevel;
+    }
+
+    @Override
+    public void terminal(int codepoint) {
+      String text = Character.toString(codepoint);
+      charPointer += text.length();
+      if (! UnicodeCategory.xmlChar.containsCodepoint(codepoint))
+        Errors.D04.thro(text);
+      if (attributeLevel > 0) {
+        content.append(text);
+      }
+    }
+  }
+
+
   private static class StackNode {
     private final StackNode link;
     private final int state;
@@ -590,115 +679,161 @@ public class Parser
     }
 
     public String parse(Option... options) {
-      long t0 = System.currentTimeMillis();
-
       Set<Option> currentOptions = options.length == 0
           ? defaultOptions
           : Set.of(options);
       StringBuilder w = new StringBuilder();
-      XmlSerializer s = new XmlSerializer(w, currentOptions.contains(Option.INDENT));
-      eventHandler = new ParseTreeBuilder();
+      XmlSerializer serializer = new XmlSerializer(w, currentOptions.contains(Option.INDENT));
+      doParse(serializer, currentOptions);
+      return w.toString();
+    }
+
+    public String parseTixml(SmaxDocument smaxDocument, Option... options) {
+      Set<Option> currentOptions = options.length == 0
+          ? defaultOptions
+          : Set.of(options);
+      // When not failing, the error message replaces the content of the input. That does not work with SMAX (yet).
+      // TODO: Replace the failing part of the SMAX document with the error.
+      currentOptions = Stream.concat(currentOptions.stream(), Stream.of(Option.FAIL_ON_ERROR)).collect(Collectors.toUnmodifiableSet());
+      XmlSerializer serializer = new SmaxSerializer(smaxDocument);
+      doParse(serializer, currentOptions);
+      try
+      {
+        return XmlString.fromSmax(smaxDocument);
+      }
+      catch (Exception e)
+      {
+        throw new BlitzException(e.getMessage());
+      }
+    }
+
+    /**
+     * @param currentOptions
+     */
+    private void doParse(XmlSerializer serializer, Set<Option> currentOptions)
+    {
+      long t0 = System.currentTimeMillis();
+      trace = currentOptions.contains(Option.TRACE);
+      if (trace)
+        writeTrace("<?xml version=\"1.0\" encoding=\"UTF-8\"?" + ">\n<trace>\n");
+      int start = 0;
+      size = input.length();
+      maxId = 0;
+      ParsingThread thread;
       try {
-        trace = currentOptions.contains(Option.TRACE);
-        if (trace)
-          writeTrace("<?xml version=\"1.0\" encoding=\"UTF-8\"?" + ">\n<trace>\n");
-        size = input.length();
-        maxId = 0;
-        ParsingThread thread;
-        try {
-          thread = parse();
-        }
-        catch (ParseException pe) {
-          int begin = pe.getBegin();
-          String prefix = input.substring(0, begin);
-          int offending = pe.getOffending();
-          int line = prefix.replaceAll("[^\n]", "").length() + 1;
-          int column = prefix.length() - prefix.lastIndexOf('\n');
-          throw new BlitzParseException(
-              "Failed to parse input:\n" + getErrorMessage(pe),
-              offending >= 0 ? terminal[offending].shortName()
-                             : begin < input.length() ? ("'" + Character.toString(input.codePointAt(begin)) + "'")
-                                                       : "$",
-              line,
-              column
-          );
-        }
-        finally {
-          if (trace) {
-            writeTrace("</trace>\n");
+
+        while (start < size) {
+          eventHandler = new ParseTreeBuilder();
+
+          try {
             try {
-              err.flush();
+              if (trace)
+                writeTrace("<parse-start startPos=\""+start+"\"/>\n");
+              thread = parseThread(start);
+              if (currentOptions.contains(Option.MULTIPLE_MATCHES))
+                start = thread.b1;
+              else
+                start = size;
             }
-            catch (IOException e) {
+            catch (ParseException pe) {
+              if (currentOptions.contains(Option.SKIP_UNMATCHED_WORDS)) {
+                if (start != pe.getEnd()-1)
+                  throw new BlitzException("Wethern's Law in action: start="+start+" is not equal to end-1="+(pe.getEnd()-1));
+                new Terminal(input.charAt(start++)).send(serializer);
+                thread = null; // Prevent normal serialization.
+              }
+              else {
+                int begin = pe.getBegin();
+                String prefix = input.substring(start, begin);
+                int offending = pe.getOffending();
+                int line = prefix.replaceAll("[^\n]", "").length() + 1;
+                int column = prefix.length() - prefix.lastIndexOf('\n');
+                throw new BlitzParseException(
+                    "Failed to parse input:\n" + getErrorMessage(pe),
+                    offending >= 0 ? terminal[offending].shortName()
+                                   : begin < input.length() ? ("'" + Character.toString(input.codePointAt(begin)) + "'")
+                                                             : "$",
+                    line,
+                    column
+                );
+              }
+            }
+
+            if (thread != null) {
+              Nonterminal startSymbol = ((Nonterminal) eventHandler.stack[0]);
+              if (startSymbol.children == null || startSymbol.children.length == 0)
+                Errors.D01.thro(); // not well-formed
+              if (! (startSymbol.children[0] instanceof Nonterminal))
+                Errors.D06.thro(); // not exactly one element
+              Nonterminal nonterminal = (Nonterminal) startSymbol.children[0];
+              if (nonterminal.isAttribute)
+                Errors.D05.thro(); // attribute as root
+              if (startSymbol.children.length != 1)
+                Errors.D06.thro(); // not exactly one element
+
+              if (thread.isAmbiguous || isVersionMismatch) {
+                String state = thread.isAmbiguous && isVersionMismatch
+                    ? "ambiguous version-mismatch"
+                    : thread.isAmbiguous
+                        ? "ambiguous"
+                        : "version-mismatch";
+                nonterminal.addChildren(new Symbol[] {
+                    Nonterminal.attribute("xmlns:ixml", IXML_NAMESPACE),
+                    Nonterminal.attribute("ixml:state", state)
+                });
+              }
+
+              eventHandler.serialize(serializer);
             }
           }
+          catch (BlitzIxmlException e) {
+            if (currentOptions.contains(Option.FAIL_ON_ERROR))
+              throw e;
+            Nonterminal ixml = new Nonterminal("ixml");
+            ixml.addChildren(new Symbol[] {
+                Nonterminal.attribute("xmlns:ixml", IXML_NAMESPACE),
+                Nonterminal.attribute("ixml:state", "failed"),
+                Nonterminal.attribute("ixml:error-code", e.getError().name()),
+                new Insertion(e.getMessage().codePoints().toArray())
+            });
+            Nonterminal root = new Nonterminal("root");
+            root.addChild(ixml);
+            eventHandler.stack[0] = root;
+          }
+          catch (BlitzException e) {
+            if (currentOptions.contains(Option.FAIL_ON_ERROR))
+              throw e;
+            Nonterminal ixml = new Nonterminal("ixml");
+            ixml.addChildren(new Symbol[] {
+                Nonterminal.attribute("xmlns:ixml", IXML_NAMESPACE),
+                Nonterminal.attribute("ixml:state", "failed"),
+                new Insertion(e.getMessage().codePoints().toArray())
+            });
+            Nonterminal root = new Nonterminal("root");
+            root.addChild(ixml);
+            eventHandler.stack[0] = root;
+          }
         }
-
-        Nonterminal startSymbol = ((Nonterminal) eventHandler.stack[0]);
-        if (startSymbol.children == null || startSymbol.children.length == 0)
-          Errors.D01.thro(); // not well-formed
-        if (! (startSymbol.children[0] instanceof Nonterminal))
-          Errors.D06.thro(); // not exactly one element
-        Nonterminal nonterminal = (Nonterminal) startSymbol.children[0];
-        if (nonterminal.isAttribute)
-          Errors.D05.thro(); // attribute as root
-        if (startSymbol.children.length != 1)
-          Errors.D06.thro(); // not exactly one element
-
-        if (thread.isAmbiguous || isVersionMismatch) {
-          String state = thread.isAmbiguous && isVersionMismatch
-              ? "ambiguous version-mismatch"
-              : thread.isAmbiguous
-                  ? "ambiguous"
-                  : "version-mismatch";
-          nonterminal.addChildren(new Symbol[] {
-              Nonterminal.attribute("xmlns:ixml", IXML_NAMESPACE),
-              Nonterminal.attribute("ixml:state", state)
-          });
+      } finally {
+        if (trace) {
+          writeTrace("</trace>\n");
+          try {
+            err.flush();
+          }
+          catch (IOException e) {
+          }
         }
-      }
-      catch (BlitzIxmlException e) {
-        if (currentOptions.contains(Option.FAIL_ON_ERROR))
-          throw e;
-        Nonterminal ixml = new Nonterminal("ixml");
-        ixml.addChildren(new Symbol[] {
-            Nonterminal.attribute("xmlns:ixml", IXML_NAMESPACE),
-            Nonterminal.attribute("ixml:state", "failed"),
-            Nonterminal.attribute("ixml:error-code", e.getError().name()),
-            new Insertion(e.getMessage().codePoints().toArray())
-        });
-        Nonterminal root = new Nonterminal("root");
-        root.addChild(ixml);
-        eventHandler.stack[0] = root;
-      }
-      catch (BlitzException e) {
-        if (currentOptions.contains(Option.FAIL_ON_ERROR))
-          throw e;
-        Nonterminal ixml = new Nonterminal("ixml");
-        ixml.addChildren(new Symbol[] {
-            Nonterminal.attribute("xmlns:ixml", IXML_NAMESPACE),
-            Nonterminal.attribute("ixml:state", "failed"),
-            new Insertion(e.getMessage().codePoints().toArray())
-        });
-        Nonterminal root = new Nonterminal("root");
-        root.addChild(ixml);
-        eventHandler.stack[0] = root;
-      }
-      finally {
         if (currentOptions.contains(Option.TIMING)) {
           long t1 = System.currentTimeMillis();
           System.err.println("        ixml parsing time: " + (t1 - t0) + " msec");
         }
       }
-      eventHandler.serialize(s);
-      return w.toString();
     }
 
-    private ParsingThread parse() throws ParseException {
+    private ParsingThread parseThread(int pos) throws ParseException {
       Queue<ParsingThread> currentThreads = new LinkedList<>();
       Queue<ParsingThread> otherThreads = new PriorityQueue<>();
-      ParsingThread thread = new ParsingThread();
-      int pos = 0;
+      ParsingThread thread = new ParsingThread(pos);
       boolean stalled = false;
       ParsingThread accepted = null;
 
@@ -830,11 +965,15 @@ public class Parser
       private StackNode stack;
 
       public ParsingThread() {
+        this(0);
+      }
+
+      public ParsingThread(int pos) {
         forkCount = new byte[forks.length / 2];
-        b0 = 0;
-        e0 = 0;
-        b1 = 0;
-        e1 = 0;
+        b0 = pos;
+        e0 = pos;
+        b1 = pos;
+        e1 = pos;
         maxId = 0;
         id = maxId;
         isAmbiguous = false;

@@ -35,6 +35,8 @@ public class Blitz {
     /**    Parser option: Generate XML with indentation.             */ INDENT,
     /**    Parser option: Print parser trace.                        */ TRACE,
     /**    Parser option: Fail on parsing error.                     */ FAIL_ON_ERROR,
+    /**    Parser option: Skip word and reparse on parsing error.    */ SKIP_UNMATCHED_WORDS,
+    /**    Parser option: After a match, reparse for a next match.   */ MULTIPLE_MATCHES,
     /** Generator option: Partial parsing, accepting longest match.  */ LONGEST_MATCH,
     /** Generator option: Partial parsing, accepting shortest match. */ SHORTEST_MATCH,
     /** Generator option: Print timing information.                  */ TIMING,
