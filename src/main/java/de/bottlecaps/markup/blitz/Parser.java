@@ -128,6 +128,7 @@ public class Parser
   private void writeTrace(String content) {
     try {
       err.write(content);
+      err.flush();
     }
     catch (IOException e) {
       throw new BlitzException(e);
@@ -742,9 +743,10 @@ public class Parser
             }
             catch (ParseException pe) {
               if (skipUnmatchedWords) {
-      // TODO Make this skip a word, not one character.
-                if (start != pe.getEnd()-1)
-                  throw new BlitzException("Wethern's Law in action: start="+start+" is not equal to end-1="+(pe.getEnd()-1));
+                if (pe.getBegin() != pe.getEnd()-1)
+                  throw new BlitzException("Wethern's Law in action: begin="+pe.getBegin()+" is not equal to end-1="+(pe.getEnd()-1), pe);
+                while (start < pe.getBegin())
+                  new Terminal(input.charAt(start++)).send(serializer);
                 if (Character.isLetterOrDigit(input.charAt(start))) {
                   // skip the rest of this word
                   new Terminal(input.charAt(start++)).send(serializer);
