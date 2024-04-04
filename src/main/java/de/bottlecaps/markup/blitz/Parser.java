@@ -109,9 +109,9 @@ public class Parser
   }
 
   /**
-   * Parse the given input using SMAX, for transparent invisible XML.
+   * Parse the given input, which is the text contained in an XML element, using SMAX, for transparent invisible XML.
    *
-   * @param input the input string
+   * @param inputElement the input element
    * @param options options for use at parsing time. If absent, any options passed at generation time will be in effect
    * @return the resulting XML
    */

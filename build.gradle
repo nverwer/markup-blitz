@@ -9,10 +9,12 @@ group = 'de.bottlecaps'
 
 repositories {
     mavenCentral()
+    mavenLocal()
 }
 
 dependencies {
     testImplementation 'org.basex:basex:10.7'
+    implementation 'org.greenmercury:SMAX:1.0.0-SNAPSHOT'
 }
 
 testing {
