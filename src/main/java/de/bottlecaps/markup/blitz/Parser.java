@@ -61,6 +61,7 @@ public class Parser
   private final boolean shortestMatch;
   private final boolean skipUnmatchedWords;
   private final boolean multipleMatches;
+  private final boolean normalizeEol;
 
   private Writer err = new OutputStreamWriter(System.err, StandardCharsets.UTF_8);
 
@@ -75,6 +76,7 @@ public class Parser
       int[] forks,
       BitSet[] expectedTokens,
       boolean isVersionMismatch,
+      boolean normalizeEol,
       boolean shortestMatch,
       boolean skipUnmatchedWords, boolean multipleMatches) {
 
@@ -92,6 +94,7 @@ public class Parser
     this.forks = forks;
     this.expectedTokens = expectedTokens;
     this.isVersionMismatch = isVersionMismatch;
+    this.normalizeEol = normalizeEol;
     this.shortestMatch = shortestMatch;
     this.skipUnmatchedWords = skipUnmatchedWords;
     this.multipleMatches = multipleMatches;
@@ -1162,6 +1165,11 @@ public class Parser
             if (trace)
               if (c1 >= 32 && c1 <= 126)
                 writeTrace(" char=\"" + xmlEscape(String.valueOf((char) c1)) + "\"");
+            if (c1 == 0xD && normalizeEol) {
+              if (e1 < size && input.charAt(e1) == 0xA)
+                ++e1;
+              c1 = 0xA;
+            }
             charclass = asciiMap[c1];
           }
           else if (c1 < 0xd800) {

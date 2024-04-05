@@ -207,6 +207,7 @@ public class Generator {
         ci.forks,
         expectedTokens,
         ci.grammar.isMismatch(),
+        ci.grammar.getVersion().isAtLeast(Grammar.Version.V1_1),
         shortestMatch,
         skipUnmatchedWords, multipleMatches);
   }
