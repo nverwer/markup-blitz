@@ -91,10 +91,21 @@ public class Parser
    * Parse the given input.
    *
    * @param input the input string
-   * @return the resulting XML
+   * @return the resulting XML serialized as a string
    */
   public String parse(String input) {
     return new ParsingContext(input).parse();
+  }
+
+  /**
+   * Parse the given input and serialize using the serializer.
+   * @param <Serialization> the type of the serializer output
+   * @param input the input string
+   * @param serializer the serializer for the resulting parse tree
+   * @return the serialization of the resulting parse tree
+   */
+  public <Serialization> Serialization parse(String input, Serializer<Serialization> serializer) {
+    return new ParsingContext(input).parse(serializer);
   }
 
   public void setTraceWriter(Writer w) {
@@ -158,8 +169,8 @@ public class Parser
   }
 
   private static abstract class Symbol {
-    public abstract void send(XmlSerializer e);
-    public abstract void sendContent(XmlSerializer e);
+    public abstract void send(Serializer<?> e);
+    public abstract void sendContent(Serializer<?> e);
   }
 
   private static class Terminal extends Symbol {
@@ -170,14 +181,33 @@ public class Parser
     }
 
     @Override
-    public void send(XmlSerializer e) {
+    public void send(Serializer<?> e) {
       e.terminal(codepoint);
     }
 
     @Override
-    public void sendContent(XmlSerializer e) {
+    public void sendContent(Serializer<?> e) {
       e.terminal(codepoint);
     }
+  }
+
+  private static class Exclusion extends Symbol {
+
+    public Exclusion(Symbol symbol) {
+    }
+
+    @Override
+    public void send(Serializer<?> e)
+    {
+      e.excluded(1);
+    }
+
+    @Override
+    public void sendContent(Serializer<?> e)
+    {
+      e.excluded(1);
+    }
+
   }
 
   private static class Insertion extends Symbol {
@@ -188,13 +218,13 @@ public class Parser
     }
 
     @Override
-    public void send(XmlSerializer e) {
+    public void send(Serializer<?> e) {
       for (int codepoint : codepoints)
         e.terminal(codepoint);
     }
 
     @Override
-    public void sendContent(XmlSerializer e) {
+    public void sendContent(Serializer<?> e) {
       for (int codepoint : codepoints)
         e.terminal(codepoint);
     }
@@ -242,7 +272,7 @@ public class Parser
     }
 
     @Override
-    public void send(XmlSerializer e) {
+    public void send(Serializer<?> e) {
       if (name.charAt(0) == ' ')
         Errors.D03.thro(name.substring(1));
       if (isAttribute) {
@@ -275,7 +305,7 @@ public class Parser
     }
 
     @Override
-    public void sendContent(XmlSerializer e) {
+    public void sendContent(Serializer<?> e) {
       for (Symbol c : children)
         c.sendContent(e);
     }
@@ -288,7 +318,7 @@ public class Parser
     }
   }
 
-  private static class XmlSerializer {
+  private static class XmlSerializer implements Serializer<String> {
     private static final String INDENTATION = "   ";
 
     private StringBuilder out;
@@ -298,8 +328,8 @@ public class Parser
     private boolean indent;
     private boolean hasChildElement;
 
-    public XmlSerializer(StringBuilder out, boolean indent) {
-      this.out = out;
+    public XmlSerializer(boolean indent) {
+      this.out = new StringBuilder();
       this.indent = indent;
       depth = 0;
       attributeLevel = 0;
@@ -307,6 +337,7 @@ public class Parser
       hasChildElement = false;
     }
 
+    @Override
     public void startNonterminal(String name) {
       if (attributeLevel == 0) {
         if (delayedTag)
@@ -324,6 +355,7 @@ public class Parser
       }
     }
 
+    @Override
     public void endNonterminal(String name) {
       if (attributeLevel == 0) {
         --depth;
@@ -347,6 +379,7 @@ public class Parser
       }
     }
 
+    @Override
     public void startAttribute(String name) {
       ++attributeLevel;
       out.append(' ');
@@ -354,11 +387,13 @@ public class Parser
       out.append("=\"");
     }
 
+    @Override
     public void endAttribute() {
       out.append('\"');
       --attributeLevel;
     }
 
+    @Override
     public void terminal(int codepoint) {
       if (! UnicodeCategory.xmlChar.containsCodepoint(codepoint))
         Errors.D04.thro(Codepoint.toString(codepoint));
@@ -400,6 +435,17 @@ public class Parser
           }
         }
       }
+    }
+
+    @Override
+    public void excluded(int length)
+    {
+    }
+
+    @Override
+    public String getSerialization()
+    {
+      return out.toString();
     }
   }
 
@@ -534,6 +580,8 @@ public class Parser
         if (symbol instanceof Terminal) {
           if (mark == Mark.NODE)
             nt.addChild(symbol);
+          else
+            nt.addChild(new Exclusion(symbol));
         }
         else {
           Nonterminal n = (Nonterminal) symbol;
@@ -567,7 +615,7 @@ public class Parser
       push(new Terminal(codepoint));
     }
 
-    public void serialize(XmlSerializer e) {
+    public void serialize(Serializer<?> e) {
       ((Nonterminal) stack[0]).children[0].send(e);
     }
 
@@ -592,6 +640,11 @@ public class Parser
     }
 
     public String parse() {
+      XmlSerializer serializer = new XmlSerializer(Option.INDENT.is(true, options));
+      return parse(serializer);
+    }
+
+    public <Serialization> Serialization parse(Serializer<Serialization> s) {
       long t0 = System.currentTimeMillis();
 
       try {
@@ -714,10 +767,8 @@ public class Parser
         }
       }
 
-      StringBuilder w = new StringBuilder();
-      XmlSerializer s = new XmlSerializer(w, Option.INDENT.is(true, options));
       eventHandler.serialize(s);
-      return w.toString();
+      return s.getSerialization();
     }
 
     private ParsingThread parse(ParsingThread thread) throws ParseException {

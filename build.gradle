@@ -4,7 +4,7 @@ plugins {
     id 'signing'
 }
 
-version = '2.0-SNAPSHOT'
+version = '2.0-tixml-SNAPSHOT'
 group = 'de.bottlecaps'
 
 repositories {

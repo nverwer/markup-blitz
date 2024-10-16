@@ -89,7 +89,7 @@ public enum Option {
     return addTo(options, key, val);
   }
 
-  private static boolean addTo(Map<Option, Object> options, String key, String val) {
+  public static boolean addTo(Map<Option, Object> options, String key, String val) {
     Option option = Arrays.stream(values())
         .filter(v -> v.externalName().equals(key))
         .findFirst()
